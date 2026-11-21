@@ -8,7 +8,13 @@ using System.Windows.Threading;
 using Microsoft.Win32;
 namespace Ansary;
 public sealed class App:Application {
- [STAThread] public static void Main()=>new App().Run(new LibraryWindow());
+ [STAThread] public static int Main(string[] args){
+  bool smoke=args.Contains("--startup-smoke-test");
+  try{var app=new App();var window=new LibraryWindow();bool rendered=false;
+   if(smoke)window.ContentRendered+=(_,_)=>{rendered=true;app.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle,new Action(()=>app.Shutdown(0)));};
+   int code=app.Run(window);return smoke&&!rendered?1:code;
+  }catch(Exception e){if(smoke){try{File.WriteAllText("startup-smoke-error.txt",e.ToString());}catch{}}else MessageBox.Show("تعذر بدء المكتبة:\n"+e.Message,"الأنصاري");return 1;}
+ }
 }
 public sealed class LibraryWindow:Window {
  readonly TreeView library=new(),results=new();
@@ -38,7 +44,7 @@ public sealed class LibraryWindow:Window {
   DockPanel.SetDock(status,Dock.Bottom);root.Children.Add(status);
   var grid=new Grid();root.Children.Add(grid);
   foreach(var width in new[]{2d,0,3,0,5})grid.ColumnDefinitions.Add(width==0?new ColumnDefinition{Width=new GridLength(5)}:new ColumnDefinition{Width=new GridLength(width,GridUnitType.Star)});
-  grid.Children.Add(library);Grid.SetColumn(results,2);grid.Children.Add(results);Grid.SetColumn(viewer,4);grid.Children.Add(viewer);
+  grid.Children.Add(library);Grid.SetColumn(results,2);grid.Children.Add(results);
   foreach(var col in new[]{1,3}){var splitter=new GridSplitter{Width=5,HorizontalAlignment=HorizontalAlignment.Stretch,VerticalAlignment=VerticalAlignment.Stretch};Grid.SetColumn(splitter,col);grid.Children.Add(splitter);}
   var viewerBar=new DockPanel{Margin=new Thickness(0,0,0,5)};var viewerHost=new DockPanel();DockPanel.SetDock(viewerBar,Dock.Top);viewerHost.Children.Add(viewerBar);viewerHost.Children.Add(viewer);Grid.SetColumn(viewerHost,4);grid.Children.Add(viewerHost);
   viewerBar.Children.Add(new TextBlock{Text="بحث داخل الملف:",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,6,0)});viewerBar.Children.Add(viewerQuery);

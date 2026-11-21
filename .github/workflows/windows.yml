@@ -17,13 +17,26 @@ jobs:
         run: dotnet run --project checks/Checks.csproj -c Release
       - name: Publish Windows x64 self-contained preview
         run: dotnet publish src/Library.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+      - name: Verify published WPF window renders
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path publish/ElansaryWordLibrary.exe).Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--startup-smoke-test' -PassThru
+          if (!$process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'WPF startup smoke test timed out'
+          }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path startup-smoke-error.txt) { Get-Content startup-smoke-error.txt | Write-Host }
+            throw "WPF startup smoke test failed: $($process.ExitCode)"
+          }
       - name: Package
         shell: pwsh
         run: |
           if (!(Test-Path publish/ElansaryWordLibrary.exe)) { throw 'Missing executable' }
           Copy-Item README.md publish/README.md
           Compress-Archive -Path publish/* -DestinationPath ElansaryWordLibrary-win-x64.zip
-          "Commit: $env:GITHUB_SHA`nCore checks passed. WPF user interface not device-tested. DOCX text-only preview; no DOC support or persistent content index." | Set-Content build-report.txt
+          "Commit: $env:GITHUB_SHA`nCore checks passed. Published WPF startup smoke test passed (ContentRendered). Full UI interactions not device-tested. DOCX text-only preview; no DOC support or persistent content index." | Set-Content build-report.txt
       - uses: actions/upload-artifact@v4
         with:
           name: windows-library-preview
