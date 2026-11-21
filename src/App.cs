@@ -13,35 +13,44 @@ public sealed class App:Application {
 public sealed class LibraryWindow:Window {
  readonly TreeView library=new(),results=new();
  readonly RichTextBox viewer=new(){IsReadOnly=true,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};
- readonly TextBox query=new(){MinWidth=180};
+ readonly TextBox query=new(){MinWidth=180},viewerQuery=new(){MinWidth=140};
  readonly TextBlock status=new(){TextWrapping=TextWrapping.Wrap,MaxHeight=60};
  readonly List<string> files=new(),errors=new();readonly HashSet<string> selected=new(StringComparer.OrdinalIgnoreCase);
  readonly WrapPanel tools=new();readonly List<Button> workButtons=new();CancellationTokenSource? cancel;
  readonly string settings=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ElansaryWordLibrary","files.json");
- readonly Button foldResults,foldLibrary;
+ readonly Button foldResults,foldLibrary,collectResults,syncResult;
  string[] terms=Array.Empty<string>();int phase,viewVersion;bool libraryExpanded=true;
+ readonly List<Hit> collected=new();Hit? currentHit;
  record Hit(string Path,int Index,string Text);
  static readonly Brush FolderFill=new SolidColorBrush(Color.FromRgb(210,237,221));
  static readonly Brush FileFill=new SolidColorBrush(Color.FromRgb(216,231,252));
  public LibraryWindow(){
-  Title="الأنصاري — مكتبة Word — انتقال متزامن وطي مستويين";Width=1300;Height=850;MinWidth=850;MinHeight=550;FlowDirection=FlowDirection.RightToLeft;
+  Title="الأنصاري — مكتبة Word — بحث داخلي وتجميع النتائج";Width=1300;Height=850;MinWidth=850;MinHeight=550;FlowDirection=FlowDirection.RightToLeft;
   var root=new DockPanel{Margin=new Thickness(10)};Content=root;
   DockPanel.SetDock(tools,Dock.Top);root.Children.Add(tools);
   Add("إضافة مجلد",Folder);Add("إضافة ملفات",()=>{Import();return Task.CompletedTask;});
   tools.Children.Add(query);Add("بحث",Search);Add("إلغاء",()=>{cancel?.Cancel();return Task.CompletedTask;},false);
   foldResults=Add("طي النتائج",()=>{FoldResults();return Task.CompletedTask;},false);
   foldLibrary=Add("طي ملفات المكتبة",()=>{libraryExpanded=!library.Items.OfType<TreeViewItem>().All(n=>n.IsExpanded);foreach(var n in library.Items.OfType<TreeViewItem>())n.IsExpanded=libraryExpanded;foldLibrary.Content=libraryExpanded?"طي ملفات المكتبة":"فرد ملفات المكتبة";return Task.CompletedTask;},false);
+  collectResults=Add("النتائج (0)",()=>{ShowCollected();return Task.CompletedTask;},false);
+  syncResult=Add("مزامنة",()=>{SyncCurrent();return Task.CompletedTask;},false);
   Add("تقرير",()=>{MessageBox.Show(errors.Count==0?"لا توجد أخطاء مسجلة":string.Join("\n",errors.Take(100)),"تقرير");return Task.CompletedTask;},false);
   DockPanel.SetDock(status,Dock.Bottom);root.Children.Add(status);
   var grid=new Grid();root.Children.Add(grid);
   foreach(var width in new[]{2d,0,3,0,5})grid.ColumnDefinitions.Add(width==0?new ColumnDefinition{Width=new GridLength(5)}:new ColumnDefinition{Width=new GridLength(width,GridUnitType.Star)});
   grid.Children.Add(library);Grid.SetColumn(results,2);grid.Children.Add(results);Grid.SetColumn(viewer,4);grid.Children.Add(viewer);
   foreach(var col in new[]{1,3}){var splitter=new GridSplitter{Width=5,HorizontalAlignment=HorizontalAlignment.Stretch,VerticalAlignment=VerticalAlignment.Stretch};Grid.SetColumn(splitter,col);grid.Children.Add(splitter);}
+  var viewerBar=new DockPanel{Margin=new Thickness(0,0,0,5)};var viewerHost=new DockPanel();DockPanel.SetDock(viewerBar,Dock.Top);viewerHost.Children.Add(viewerBar);viewerHost.Children.Add(viewer);Grid.SetColumn(viewerHost,4);grid.Children.Add(viewerHost);
+  viewerBar.Children.Add(new TextBlock{Text="بحث داخل الملف:",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(0,0,6,0)});viewerBar.Children.Add(viewerQuery);
+  var find=new Button{Content="بحث داخلي",Margin=new Thickness(6,0,0,0),Padding=new Thickness(7)};find.Click+=async(_,_)=>await ViewerSearch();viewerBar.Children.Add(find);
+  var next=new Button{Content="التالي",Margin=new Thickness(6,0,0,0),Padding=new Thickness(7)};next.Click+=(_,_)=>ViewerNext();viewerBar.Children.Add(next);
+  var prev=new Button{Content="السابق",Margin=new Thickness(6,0,0,0),Padding=new Thickness(7)};prev.Click+=(_,_)=>ViewerPrevious();viewerBar.Children.Add(prev);
   results.SelectedItemChanged+=async(_,e)=>{if(e.NewValue is TreeViewItem item&&item.Tag is Hit hit)await Show(hit);};
   query.KeyDown+=async(_,e)=>{if(e.Key==System.Windows.Input.Key.Enter&&cancel==null)await Search();};
+  viewerQuery.KeyDown+=async(_,e)=>{if(e.Key==System.Windows.Input.Key.Enter)await ViewerSearch();};
   Closing+=(_,_)=>{viewVersion++;cancel?.Cancel();};
   try{if(File.Exists(settings))files.AddRange((JsonSerializer.Deserialize<string[]>(File.ReadAllText(settings))??Array.Empty<string>()).Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase));}catch(Exception e){errors.Add("تحميل المكتبة: "+e.Message);}
-  Rebuild();status.Text="DOCX فقط — اضغط نص النتيجة للانتقال إلى فقرتها. طي النتائج يعمل على مستويين.";
+  Rebuild();status.Text="DOCX فقط — استخدم بحث داخل الملف، ثم النتائج لتجميعها، والمزامنة لإرسال الفقرة المفتوحة.";
  }
  static Border Header(object content,bool folder){UIElement child=content is UIElement element?element:new TextBlock{Text=content.ToString(),TextWrapping=TextWrapping.Wrap,FontWeight=FontWeights.Bold,Foreground=Brushes.MidnightBlue};return new Border{Background=folder?FolderFill:FileFill,BorderBrush=folder?Brushes.SeaGreen:Brushes.SteelBlue,BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(5),Padding=new Thickness(8,5,8,5),Margin=new Thickness(2),MinWidth=130,Child=child};}
  Button Add(string text,Func<Task> action,bool busy=true){var b=new Button{Content=text,Margin=new Thickness(3),Padding=new Thickness(7)};tools.Children.Add(b);if(busy)workButtons.Add(b);b.Click+=async(_,_)=>{try{await action();}catch(Exception e){errors.Add(e.Message);status.Text=e.Message;}};return b;}
@@ -58,12 +67,16 @@ public sealed class LibraryWindow:Window {
     foreach(var path in scope){token.ThrowIfCancellationRequested();try{var paragraphs=Core.Read(path);for(int i=0;i<paragraphs.Length;i++){token.ThrowIfCancellationRequested();if(Core.Match(paragraphs[i],requested)){if(hits.Count==2000){capped=true;break;}hits.Add(new Hit(path,i,paragraphs[i]));}}}catch(Exception e) when(e is not OperationCanceledException){failures.Add(path+": "+e.Message);}if(capped)break;}
     return(hits,failures,capped);},token);
    terms=requested;phase=0;foldResults.Content="طي النتائج";errors.AddRange(scan.failures);
-   foreach(var folder in scan.hits.GroupBy(h=>Path.GetDirectoryName(h.Path)??"")){var branch=new TreeViewItem{Header=Header(folder.Key,true),IsExpanded=true};results.Items.Add(branch);foreach(var file in folder.GroupBy(h=>h.Path)){var node=new TreeViewItem{Header=Header($"{Path.GetFileName(file.Key)} ({file.Count()})",false),IsExpanded=true};branch.Items.Add(node);foreach(var hit in file){var row=new StackPanel();var copy=new Button{Content="نسخ",HorizontalAlignment=HorizontalAlignment.Left};copy.Click+=(_,_)=>{try{Clipboard.SetText(hit.Path+"\n"+hit.Text);}catch(Exception e){status.Text=e.Message;}};row.Children.Add(copy);var snippet=new TextBlock{TextWrapping=TextWrapping.Wrap,MaxWidth=420,Cursor=System.Windows.Input.Cursors.Hand,Padding=new Thickness(4)};Paint(snippet.Inlines,$"فقرة {hit.Index+1}: {hit.Text}",requested);var item=new TreeViewItem{Header=row,Tag=hit};snippet.MouseLeftButtonDown+=async(_,e)=>{e.Handled=true;if(item.IsSelected)await Show(hit);else item.IsSelected=true;};row.Children.Add(snippet);node.Items.Add(item);}}}
+   RenderHits(scan.hits,requested,"نتائج البحث العام");
    status.Text=$"النتائج المعروضة: {scan.hits.Count} | أخطاء القراءة: {scan.failures.Count}"+(scan.capped?" | وصلت إلى حد 2000؛ ضيّق البحث":"");
   });
  }
+ void RenderHits(List<Hit> hits,string[] words,string title){
+  var titleNode=new TreeViewItem{Header=Header(title,true),IsExpanded=true};results.Items.Add(titleNode);
+  foreach(var folder in hits.GroupBy(h=>Path.GetDirectoryName(h.Path)??"")){var branch=new TreeViewItem{Header=Header(folder.Key,true),IsExpanded=true};titleNode.Items.Add(branch);foreach(var file in folder.GroupBy(h=>h.Path)){var node=new TreeViewItem{Header=Header($"{Path.GetFileName(file.Key)} ({file.Count()})",false),IsExpanded=true};branch.Items.Add(node);foreach(var hit in file){var row=new StackPanel();var copy=new Button{Content="نسخ",HorizontalAlignment=HorizontalAlignment.Left};copy.Click+=(_,_)=>{try{Clipboard.SetText(hit.Path+"\n"+hit.Text);}catch(Exception e){status.Text=e.Message;}};row.Children.Add(copy);var snippet=new TextBlock{TextWrapping=TextWrapping.Wrap,MaxWidth=420,Cursor=System.Windows.Input.Cursors.Hand,Padding=new Thickness(4)};Paint(snippet.Inlines,$"فقرة {hit.Index+1}: {hit.Text}",words);var item=new TreeViewItem{Header=row,Tag=hit};snippet.MouseLeftButtonDown+=async(_,e)=>{e.Handled=true;if(item.IsSelected)await Show(hit);else item.IsSelected=true;};row.Children.Add(snippet);node.Items.Add(item);}}}
+ }
  async Task Show(Hit hit){
-  int version=++viewVersion;var words=terms.ToArray();
+  int version=++viewVersion;var words=terms.ToArray();currentHit=hit;
   try{
    var paragraphs=await Task.Run(()=>Core.Read(hit.Path));if(version!=viewVersion)return;
    if(hit.Index>=paragraphs.Length)throw new IOException("تغيّر الملف منذ البحث؛ أعد البحث لتحديث موضع النتيجة");
@@ -80,6 +93,31 @@ public sealed class LibraryWindow:Window {
     viewer.UpdateLayout();target.BringIntoView();status.Text=$"{Path.GetFileName(hit.Path)} — الفقرة {hit.Index+1}";
    },DispatcherPriority.ContextIdle);
   }catch(Exception e){if(version==viewVersion){errors.Add(e.Message);status.Text="تعذر عرض الملف: "+e.Message;}}
+ }
+ async Task ViewerSearch(){
+  var words=Core.Terms(viewerQuery.Text);if(words.Length==0){status.Text="اكتب كلمات البحث داخل الملف";return;}
+  if(currentHit==null){status.Text="افتح نتيجة أولًا لتحديد الملف";return;}
+  int version=++viewVersion;var path=currentHit.Path;
+  try{
+   var paragraphs=await Task.Run(()=>Core.Read(path));if(version!=viewVersion)return;
+   var hits=new List<Hit>();for(int i=0;i<paragraphs.Length;i++)if(Core.Match(paragraphs[i],words))hits.Add(new Hit(path,i,paragraphs[i]));
+   terms=words;phase=0;foldResults.Content="طي النتائج";RenderHits(hits,words,$"نتائج داخل: {Path.GetFileName(path)}");
+   status.Text=$"نتائج البحث الداخلي: {hits.Count} في {Path.GetFileName(path)}";
+  }catch(Exception e){if(version==viewVersion){errors.Add(e.Message);status.Text="تعذر البحث داخل الملف: "+e.Message;}}
+ }
+ void ViewerNext(){
+  if(currentHit==null)return;var words=Core.Terms(viewerQuery.Text);if(words.Length==0)return;
+  try{var paragraphs=Core.Read(currentHit.Path);for(int i=currentHit.Index+1;i<paragraphs.Length;i++)if(Core.Match(paragraphs[i],words)){Show(new Hit(currentHit.Path,i,paragraphs[i]));return;}status.Text="لا توجد نتيجة تالية";}catch(Exception e){status.Text=e.Message;}
+ }
+ void ViewerPrevious(){
+  if(currentHit==null)return;var words=Core.Terms(viewerQuery.Text);if(words.Length==0)return;
+  try{var paragraphs=Core.Read(currentHit.Path);for(int i=currentHit.Index-1;i>=0;i--)if(Core.Match(paragraphs[i],words)){Show(new Hit(currentHit.Path,i,paragraphs[i]));return;}status.Text="لا توجد نتيجة سابقة";}catch(Exception e){status.Text=e.Message;}
+ }
+ void ShowCollected(){results.Items.Clear();phase=0;foldResults.Content="طي النتائج";RenderHits(collected,terms,"النتائج المجمعة");status.Text=$"النتائج المجمعة: {collected.Count}";}
+ void SyncCurrent(){
+  if(currentHit==null){status.Text="افتح نتيجة أولًا ثم اضغط مزامنة";return;}
+  if(!collected.Any(h=>h.Path==currentHit.Path&&h.Index==currentHit.Index))collected.Add(currentHit);
+  collectResults.Content=$"النتائج ({collected.Count})";status.Text=$"تمت مزامنة الفقرة {currentHit.Index+1} من {Path.GetFileName(currentHit.Path)}";
  }
  static void Paint(InlineCollection output,string text,string[] words){var colors=new[]{Brushes.Yellow,Brushes.LightGreen,Brushes.LightPink,Brushes.LightSkyBlue};int at=0;while(at<text.Length){int next=-1,which=-1;for(int i=0;i<words.Length;i++){int pos=text.IndexOf(words[i],at,StringComparison.OrdinalIgnoreCase);if(pos>=0&&(next<0||pos<next)){next=pos;which=i;}}if(next<0){output.Add(new Run(text[at..]));break;}if(next>at)output.Add(new Run(text[at..next]));output.Add(new Run(text.Substring(next,words[which].Length)){Background=colors[which%colors.Length],Foreground=Brushes.Black});at=next+words[which].Length;}}
  void FoldResults(){if(results.Items.Count==0)return;var folders=results.Items.OfType<TreeViewItem>().ToArray();var fileNodes=folders.SelectMany(f=>f.Items.OfType<TreeViewItem>()).ToArray();switch(phase){case 0:foreach(var folder in folders)folder.IsExpanded=true;foreach(var file in fileNodes)file.IsExpanded=false;phase=1;break;case 1:foreach(var file in fileNodes)file.IsExpanded=false;foreach(var folder in folders)folder.IsExpanded=false;phase=2;break;case 2:foreach(var folder in folders)folder.IsExpanded=true;foreach(var file in fileNodes)file.IsExpanded=false;phase=3;break;default:foreach(var folder in folders)folder.IsExpanded=true;foreach(var file in fileNodes)file.IsExpanded=true;phase=0;break;}foldResults.Content=new[]{"طي النتائج","طي الملفات","فرد الملفات","فرد النتائج"}[phase];}
