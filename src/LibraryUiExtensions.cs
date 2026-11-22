@@ -1,107 +1,137 @@
-using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 namespace Ansary;
 public sealed partial class LibraryWindow {
- bool libraryUiInstalled;
+ bool libraryUiInstalled,historyLocal;
  readonly List<string> searchHistory=new();
  readonly string searchHistoryPath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ElansaryWordLibrary","search-history.json");
- WrapPanel? historyChips;
+ readonly DispatcherTimer historySaveTimer=new(){Interval=TimeSpan.FromMilliseconds(700)};
+ string pendingHistory="";
+ string? libraryRemovalPath;
+ bool libraryRemovalFolder;
+ StackPanel? historyChips;
  Border? historyPanel;
+ Button? unifiedHistoryButton;
  [ModuleInitializer]
  internal static void RegisterLibraryUiExtensions(){
   EventManager.RegisterClassHandler(typeof(LibraryWindow),FrameworkElement.LoadedEvent,new RoutedEventHandler((sender,e)=>{
-   if(sender is LibraryWindow window && ReferenceEquals(e.OriginalSource,window))window.InstallLibraryUiExtensions();
+   if(sender is LibraryWindow window&&ReferenceEquals(e.OriginalSource,window))window.InstallLibraryUiExtensions();
   }));
+ }
+ static void Capsule(Button button,string color){
+  button.Background=(Brush)new BrushConverter().ConvertFromString(color)!;
+  button.Foreground=Brushes.White;button.FontWeight=FontWeights.SemiBold;
+  button.Padding=new Thickness(12,6,12,6);button.Margin=new Thickness(3);button.Cursor=Cursors.Hand;
+  var border=new FrameworkElementFactory(typeof(Border));
+  border.SetValue(Border.CornerRadiusProperty,new CornerRadius(18));
+  border.SetBinding(Border.BackgroundProperty,new Binding("Background"){RelativeSource=new RelativeSource(RelativeSourceMode.TemplatedParent)});
+  var content=new FrameworkElementFactory(typeof(ContentPresenter));
+  content.SetBinding(ContentPresenter.ContentProperty,new Binding("Content"){RelativeSource=new RelativeSource(RelativeSourceMode.TemplatedParent)});
+  content.SetBinding(FrameworkElement.MarginProperty,new Binding("Padding"){RelativeSource=new RelativeSource(RelativeSourceMode.TemplatedParent)});
+  content.SetValue(FrameworkElement.HorizontalAlignmentProperty,HorizontalAlignment.Center);
+  border.AppendChild(content);button.Template=new ControlTemplate(typeof(Button)){VisualTree=border};
  }
  void InstallLibraryUiExtensions(){
   if(libraryUiInstalled)return;
-  if(library.Parent is not Grid grid || !ReferenceEquals(results.Parent,grid)){status.Text="تعذر إضافة أدوات المكتبة: تخطيط الواجهة غير متوقع";return;}
-  libraryUiInstalled=true;
-  LoadHistory();
-  var folderBar=new WrapPanel();
-  var collapse=LocalButton(folderBar,"طي الملفات",()=>{FoldLibraryFiles(false);return System.Threading.Tasks.Task.CompletedTask;});
-  var expand=LocalButton(folderBar,"فرد الملفات",()=>{FoldLibraryFiles(true);return System.Threading.Tasks.Task.CompletedTask;});
-  var refresh=LocalButton(folderBar,"تحديث المجلدات",()=>RefreshLibraryFolders());
-  var remove=LocalButton(folderBar,"حذف من المكتبة",()=>RemoveSelectedLibraryItem());
-  collapse.Background=LibraryBrush("#8E7BEF","#6A4FD1");expand.Background=LibraryBrush("#35B37E","#1F8A5F");refresh.Background=LibraryBrush("#4F8EF7","#2F6FE0");remove.Background=LibraryBrush("#E05757","#B03A3A");
-  WrapLibraryPanel(grid,library,folderBar);
-  var historyBar=new DockPanel{Margin=new Thickness(0,4,0,4)};
-  var historyButton=LocalButton(historyBar,"سجل البحث",()=>ToggleHistory());
-  historyButton.Background=LibraryBrush("#F2B33D","#C98A20");DockPanel.SetDock(historyButton,Dock.Left);
-  historyPanel=new Border{Visibility=Visibility.Collapsed,Background=Brushes.White,BorderBrush=Brushes.Goldenrod,BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(18),Padding=new Thickness(8),MaxHeight=110};
-  historyChips=new WrapPanel{Orientation=Orientation.Horizontal};historyPanel.Child=historyChips;
-  DockPanel.SetDock(historyPanel,Dock.Top);historyBar.Children.Add(historyPanel);
-  var root=Content as DockPanel;if(root==null){status.Text="تعذر إضافة سجل البحث";return;}
-  DockPanel.SetDock(historyBar,Dock.Top);root.Children.Add(historyBar);
-  query.LostKeyboardFocus+=(_,_)=>SaveQuery(query.Text,false);
-  inside.LostKeyboardFocus+=(_,_)=>SaveQuery(inside.Text,true);
-  query.KeyDown+=async(_,e)=>{if(e.Key==Key.Enter){SaveQuery(query.Text,false);await Search(false);}};
-  inside.KeyDown+=async(_,e)=>{if(e.Key==Key.Enter){SaveQuery(inside.Text,true);await Search(true);}};
-  RenderHistory();
- }
- static Brush LibraryBrush(string top,string bottom)=>new LinearGradientBrush((Color)ColorConverter.ConvertFromString(top),(Color)ColorConverter.ConvertFromString(bottom),90);
- static void WrapLibraryPanel(Grid grid,FrameworkElement list,Panel bar){
-  int column=Grid.GetColumn(list),row=Grid.GetRow(list),columnSpan=Grid.GetColumnSpan(list),rowSpan=Grid.GetRowSpan(list);
-  grid.Children.Remove(list);
-  var host=new DockPanel();Grid.SetColumn(host,column);Grid.SetRow(host,row);Grid.SetColumnSpan(host,columnSpan);Grid.SetRowSpan(host,rowSpan);
-  DockPanel.SetDock(bar,Dock.Top);host.Children.Add(bar);host.Children.Add(list);grid.Children.Add(host);
+  if(library.Parent is not DockPanel host||host.Children.OfType<StackPanel>().FirstOrDefault() is not StackPanel libraryTop||Content is not DockPanel root)throw new InvalidOperationException("Library toolbar host missing");
+  var mainContent=root.Children.OfType<Grid>().FirstOrDefault()??throw new InvalidOperationException("Main library grid missing");
+  libraryUiInstalled=true;LoadHistory();
+  var folderBar=new WrapPanel();libraryTop.Children.Insert(0,folderBar);
+  Capsule(LocalButton(folderBar,"طي الملفات",()=>{FoldLibraryFiles(false);return Task.CompletedTask;}),"#6A4FD1");
+  Capsule(LocalButton(folderBar,"فرد الملفات",()=>{FoldLibraryFiles(true);return Task.CompletedTask;}),"#16754B");
+  var refresh=LocalButton(folderBar,"تحديث المجلدات",RefreshLibraryFolders);Capsule(refresh,"#2563A6");busyButtons.Add(refresh);
+  var remove=LocalButton(folderBar,"حذف من المكتبة",()=>{RemoveSelectedLibraryItem();return Task.CompletedTask;});Capsule(remove,"#B03333");busyButtons.Add(remove);
+  remove.ToolTip="إزالة الملف أو المجلد وفروعه من قائمة المكتبة فقط؛ لا حذف من القرص";
+  foreach(var old in tools.Children.OfType<Button>().Where(b=>b.Content?.ToString()=="طي / فرد ملفات المكتبة").ToArray()){tools.Children.Remove(old);busyButtons.Remove(old);}
+  library.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent,new MouseButtonEventHandler((_,e)=>CaptureLibraryTarget(e.OriginalSource as DependencyObject)),true);
+  var historyArea=new StackPanel{Margin=new Thickness(0,4,0,4)};
+  unifiedHistoryButton=LocalButton(historyArea,"سجل البحث الموحد — إظهار",()=>{ToggleHistory();return Task.CompletedTask;});
+  unifiedHistoryButton.HorizontalAlignment=HorizontalAlignment.Right;Capsule(unifiedHistoryButton,"#9A5600");
+  historyChips=new StackPanel{Orientation=Orientation.Horizontal};
+  historyPanel=new Border{Visibility=Visibility.Collapsed,Background=Brushes.LemonChiffon,BorderBrush=Brushes.Goldenrod,BorderThickness=new Thickness(1),CornerRadius=new CornerRadius(18),Padding=new Thickness(6),Child=new ScrollViewer{Content=historyChips,HorizontalScrollBarVisibility=ScrollBarVisibility.Auto,VerticalScrollBarVisibility=ScrollBarVisibility.Disabled,CanContentScroll=false,MinHeight=48,MaxHeight=90}};
+  historyArea.Children.Add(historyPanel);DockPanel.SetDock(historyArea,Dock.Top);root.Children.Insert(root.Children.IndexOf(mainContent),historyArea);
+  historySaveTimer.Tick+=(_,_)=>{historySaveTimer.Stop();SaveQuery(pendingHistory,false);};
+  void Track(TextBox box,bool local){
+   box.GotKeyboardFocus+=(_,_)=>historyLocal=local;
+   box.TextChanged+=(_,_)=>{pendingHistory=box.Text;historySaveTimer.Stop();historySaveTimer.Start();};
+   box.LostKeyboardFocus+=(_,_)=>{historySaveTimer.Stop();SaveQuery(box.Text,local);};
+   box.PreviewKeyDown+=(_,e)=>{if(e.Key==Key.Enter){historySaveTimer.Stop();SaveQuery(box.Text,local);}};
+  }
+  Track(query,false);Track(inside,true);
+  Closed+=(_,_)=>{historySaveTimer.Stop();SaveQuery(pendingHistory,false);};
+  RenderHistory();Title="مكتبة وورد الأنصاري — أدوات المكتبة والسجل الموحد — مراجعة 10";
+  if(!ReferenceEquals(folderBar.Parent,libraryTop)||libraryTop.Children.IndexOf(folderBar)!=0||folderBar.Children.OfType<Button>().Count()!=4||root.Children.IndexOf(historyArea)>=root.Children.IndexOf(mainContent)||historyChips.Orientation!=Orientation.Horizontal||tools.Children.OfType<Button>().Any(b=>b.Content?.ToString()=="طي / فرد ملفات المكتبة"))throw new InvalidOperationException("Library toolbar/history integration regression");
  }
  void FoldLibraryFiles(bool open){
-  foreach(var folder in library.Items.OfType<TreeViewItem>())folder.IsExpanded=open;
-  status.Text=open?"تم فرد جميع الملفات تحت المجلدات":"تم طي الملفات تحت المجلدات";
+  foreach(var node in libraryNodes.Values)node.IsExpanded=open;
+  foreach(var entry in libraryNodes)libraryExpansion[entry.Key]=open;
+  status.Text=open?"تم فرد ملفات ومجلدات المكتبة":"تم طي ملفات ومجلدات المكتبة";
  }
- void RefreshLibraryFolders(){
-  var existing=files.ToHashSet(StringComparer.OrdinalIgnoreCase);
-  var roots=files.Select(Path.GetDirectoryName).Where(p=>!string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-  var added=0;
-  foreach(var root in roots){
-   try{foreach(var file in Directory.EnumerateFiles(root,"*.docx",SearchOption.AllDirectories)){if(existing.Add(file)){files.Add(file);selected.Add(file);added++;}}}catch(Exception e){errors.Add(e.Message);}
+ async Task RefreshLibraryFolders(){
+  var roots=files.Select(Path.GetDirectoryName).OfType<string>().Where(p=>!string.IsNullOrWhiteSpace(p)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(p=>p.Length).ToArray();
+  var minimal=new List<string>();
+  foreach(var path in roots)if(!minimal.Any(parent=>IsLibraryDescendant(path,parent)))minimal.Add(path);
+  if(minimal.Count==0){status.Text="أضف مجلدًا أو ملفًا للمكتبة أولًا";return;}
+  await Work(async token=>{
+   status.Text="جار التقاط المستندات الجديدة دون تفريغ المكتبة…";
+   var found=await Task.Run(()=>{var paths=new HashSet<string>(StringComparer.OrdinalIgnoreCase);var failures=new List<string>();foreach(var path in minimal){token.ThrowIfCancellationRequested();var scan=Core.Scan(path,token);paths.UnionWith(scan.Files);failures.AddRange(scan.Errors);}return(Paths:paths,Errors:failures);},token);
+   token.ThrowIfCancellationRequested();errors.AddRange(found.Errors);
+   var existing=files.ToHashSet(StringComparer.OrdinalIgnoreCase);bool customScope=selected.Count>0;int added=0;
+   foreach(var path in found.Paths)if(existing.Add(path)){files.Add(path);if(customScope)selected.Add(path);added++;}
+   if(added>0)SaveLibrary();QueueLibraryRefresh(true);status.Text=$"تم تحديث المكتبة: {added} مستند جديد — أخطاء القراءة: {found.Errors.Count} — لم تُفرغ المكتبة";
+  });
+ }
+ static bool IsLibraryDescendant(string path,string folder){
+  string full=Path.GetFullPath(path),root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+  return full.Equals(root,StringComparison.OrdinalIgnoreCase)||full.StartsWith(root+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase);
+ }
+ void CaptureLibraryTarget(DependencyObject? source){
+  while(source!=null){
+   if(source is CheckBox box&&box.ToolTip is string path){libraryRemovalPath=path;libraryRemovalFolder=!visibleLibraryFiles.ContainsKey(path);return;}
+   if(source is TreeViewItem node&&node.Header is CheckBox header&&header.ToolTip is string folder){libraryRemovalPath=folder;libraryRemovalFolder=true;return;}
+   source=source is FrameworkContentElement c?c.Parent:source is Visual?VisualTreeHelper.GetParent(source):(source as FrameworkElement)?.Parent;
   }
-  if(added>0)SaveLibrary();Rebuild();status.Text=$"تم تحديث المكتبة: أُضيف {added} ملفًا جديدًا";
  }
  void RemoveSelectedLibraryItem(){
-  if(library.SelectedItem is TreeViewItem folder){
-   var folderPath=folder.Header?.ToString();if(string.IsNullOrWhiteSpace(folderPath)){status.Text="اختر مجلدًا أولًا";return;}
-   var removed=files.RemoveAll(p=>string.Equals(Path.GetDirectoryName(p),folderPath,StringComparison.OrdinalIgnoreCase));
-   foreach(var p in files.ToList())if(string.Equals(Path.GetDirectoryName(p),folderPath,StringComparison.OrdinalIgnoreCase))RemoveLibraryPath(p);
-   SaveLibrary();Rebuild();status.Text=$"تم حذف {removed} ملفًا من المكتبة فقط";return;
-  }
-  if(library.SelectedItem is CheckBox file){
-   var path=file.ToolTip?.ToString();if(string.IsNullOrWhiteSpace(path)){status.Text="اختر ملفًا أولًا";return;}
-   RemoveLibraryPath(path);SaveLibrary();Rebuild();status.Text=$"تم حذف الملف من المكتبة فقط: {Path.GetFileName(path)}";return;
-  }
-  status.Text="اختر مجلدًا أو ملفًا أولًا";
+  if(cancel!=null){status.Text="انتظر اكتمال العملية الحالية أولًا";return;}
+  string? path=libraryRemovalPath;bool folder=libraryRemovalFolder;
+  if(path==null){if(library.SelectedItem is CheckBox file&&file.ToolTip is string p){path=p;folder=false;}else if(library.SelectedItem is TreeViewItem node&&node.Header is CheckBox box&&box.ToolTip is string p2){path=p2;folder=true;}}
+  if(path==null){status.Text="اضغط اسم مجلد أو ملف في لوحة المكتبة أولًا";return;}
+  string[] removed=files.Where(p=>folder?IsLibraryDescendant(p,path):p.Equals(path,StringComparison.OrdinalIgnoreCase)).ToArray();
+  if(removed.Length==0){status.Text="العنصر لم يعد موجودًا في قائمة المكتبة";return;}
+  if(MessageBox.Show(this,$"إزالة {removed.Length} مستندًا من قائمة المكتبة فقط؟\n{path}\nلن يُحذف أي ملف أو مجلد من القرص.","إزالة من المكتبة فقط",MessageBoxButton.YesNo,MessageBoxImage.Question,MessageBoxResult.No)!=MessageBoxResult.Yes)return;
+  var excluded=removed.ToHashSet(StringComparer.OrdinalIgnoreCase);var kept=files.Where(p=>!excluded.Contains(p)).ToArray();
+  try{WriteLibraryJson(settings,kept);}catch(Exception e){errors.Add(e.ToString());status.Text="لم تُحذف عناصر من المكتبة؛ تعذر حفظ القائمة: "+e.Message;return;}
+  files.Clear();files.AddRange(kept);selected.ExceptWith(excluded);libraryRemovalPath=null;QueueLibraryRefresh(true);
+  status.Text=$"تمت إزالة {removed.Length} مستندًا من المكتبة فقط؛ جميع الملفات الأصلية باقية على القرص";
  }
- void RemoveLibraryPath(string path){files.RemoveAll(p=>string.Equals(p,path,StringComparison.OrdinalIgnoreCase));selected.Remove(path);}
- void SaveLibrary(){Directory.CreateDirectory(Path.GetDirectoryName(settings)!);File.WriteAllText(settings,JsonSerializer.Serialize(files));}
+ static void WriteLibraryJson(string target,IEnumerable<string> values){
+  Directory.CreateDirectory(Path.GetDirectoryName(target)!);string temporary=target+".tmp";File.WriteAllText(temporary,JsonSerializer.Serialize(values.ToArray()));File.Move(temporary,target,true);
+ }
+ void SaveLibrary()=>WriteLibraryJson(settings,files);
  void SaveQuery(string text,bool local){
-  var value=text.Trim();if(value.Length==0)return;
-  searchHistory.RemoveAll(p=>string.Equals(p,value,StringComparison.OrdinalIgnoreCase));
-  searchHistory.Insert(0,value);if(searchHistory.Count>50)searchHistory.RemoveRange(50,searchHistory.Count-50);
-  Directory.CreateDirectory(Path.GetDirectoryName(searchHistoryPath)!);File.WriteAllText(searchHistoryPath,JsonSerializer.Serialize(searchHistory));RenderHistory();
+  string value=text.Trim();if(value.Length==0)return;
+  if(searchHistory.Count>0&&searchHistory[0].Equals(value,StringComparison.Ordinal))return;
+  searchHistory.RemoveAll(p=>p.Equals(value,StringComparison.OrdinalIgnoreCase));searchHistory.Insert(0,value);if(searchHistory.Count>50)searchHistory.RemoveRange(50,searchHistory.Count-50);
+  try{WriteLibraryJson(searchHistoryPath,searchHistory);}catch(Exception e){errors.Add(e.ToString());status.Text="تعذر حفظ السجل: "+e.Message;}RenderHistory();
  }
  void LoadHistory(){
-  try{if(File.Exists(searchHistoryPath))searchHistory.AddRange(JsonSerializer.Deserialize<string[]>(File.ReadAllText(searchHistoryPath))??Array.Empty<string>());}catch(Exception e){errors.Add(e.Message);}
+  try{if(File.Exists(searchHistoryPath))searchHistory.AddRange((JsonSerializer.Deserialize<string[]>(File.ReadAllText(searchHistoryPath))??Array.Empty<string>()).Where(s=>!string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).Take(50));}catch(Exception e){errors.Add(e.ToString());}
  }
- void ToggleHistory(){
-  if(historyPanel==null)return;
-  historyPanel.Visibility=historyPanel.Visibility==Visibility.Visible?Visibility.Collapsed:Visibility.Visible;
-  if(historyPanel.Visibility==Visibility.Visible)RenderHistory();
- }
+ void ToggleHistory(){if(historyPanel==null||unifiedHistoryButton==null)return;bool show=historyPanel.Visibility!=Visibility.Visible;historyPanel.Visibility=show?Visibility.Visible:Visibility.Collapsed;unifiedHistoryButton.Content=show?"سجل البحث الموحد — إخفاء":"سجل البحث الموحد — إظهار";}
  void RenderHistory(){
   if(historyChips==null)return;historyChips.Children.Clear();
-  foreach(var item in searchHistory.Take(50)){
-   var chip=new Button{Content=item,Background=LibraryBrush("#FFF3C4","#E8C15A"),Foreground=Brushes.Black,FontWeight=FontWeights.SemiBold,BorderBrush=Brushes.Transparent,BorderThickness=new Thickness(0),Margin=new Thickness(3),Padding=new Thickness(10,5,10,5),Cursor=Cursors.Hand};
-   chip.Click+=async(_,_)=>{query.Text=item;inside.Text=item;await Search(false);};
+  if(searchHistory.Count==0){historyChips.Children.Add(new TextBlock{Text="السجل مشترك للبحث العام والبحث داخل الملف؛ اكتب في أي منهما لحفظه",Margin=new Thickness(8),Foreground=Brushes.SaddleBrown});return;}
+  foreach(string term in searchHistory){
+   var chip=new Button{Content=new TextBlock{Text=term,TextWrapping=TextWrapping.NoWrap},ToolTip=term};Capsule(chip,"#8C4B16");
+   chip.Click+=async(_,_)=>{try{bool local=historyLocal;var target=local?inside:query;target.Text=term;target.CaretIndex=term.Length;SaveQuery(term,local);await Search(local);}catch(Exception e){errors.Add(e.ToString());status.Text=e.Message;}};
    historyChips.Children.Add(chip);
   }
  }
