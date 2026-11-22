@@ -21,20 +21,25 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Prove unpatched reader reproduces collection-modified failure
+      - name: Compile regression fixture against pinned public HWPF API
         shell: pwsh
         run: |
-          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'ansary-hwpf-build.log'
+          & dotnet build checks/Checks.csproj -c Release 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw 'Compilation failed; runtime regression has not been tested' }
+      - name: Verify exact original CHP exception without rebuilding
+        shell: pwsh
+        run: |
           $log = Join-Path $env:RUNNER_TEMP 'ansary-hwpf-baseline.log'
-          & dotnet run --project checks/Checks.csproj -c Release -- --compaction-only 2>&1 | Tee-Object -FilePath $log
-          $code = $LASTEXITCODE
-          if ($code -eq 0) { throw 'Unpatched reader unexpectedly passed the regression' }
-          if (!(Select-String -Path $log -SimpleMatch 'Collection was modified' -Quiet)) { throw 'Baseline failed for a different reason; inspect the log' }
-          Write-Host 'Confirmed original collection-modified exception before patch.'
-          exit 0
+          & dotnet run --no-build --project checks/Checks.csproj -c Release -- --expect-original-failure 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw 'Expected original CHP exception was not verified' }
       - name: Apply narrowly scoped HWPF source patch
         shell: pwsh
         run: ./build/Patch-Hwpf.ps1
+      - name: Compile patched reader
+        run: dotnet build checks/Checks.csproj -c Release --no-restore
+      - name: Verify patched CHP regression without rebuilding
+        run: dotnet run --no-build --project checks/Checks.csproj -c Release -- --compaction-only
       - name: Fetch and verify binary DOC test fixture
         shell: pwsh
         run: |
@@ -46,8 +51,8 @@ jobs:
           $hash = [Convert]::ToHexString([Security.Cryptography.SHA1]::HashData($blob)).ToLowerInvariant()
           if ($hash -ne '06921df39545bd0544f062a88c4532632cbea80e') { throw 'DOC fixture hash mismatch' }
           "ANSARY_DOC_FIXTURE=$fixture" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Check patched compaction, document readers and search
-        run: dotnet run --project checks/Checks.csproj -c Release
+      - name: Check actual DOC reading and search plus other formats
+        run: dotnet run --no-build --project checks/Checks.csproj -c Release
       - name: Publish Windows x64 self-contained preview
         run: dotnet publish src/Library.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
       - name: Verify published WPF window and patched DOC reader
@@ -71,13 +76,14 @@ jobs:
           Copy-Item legacy-reader/upstream/scratchpad/HWPFCore/LICENSE publish/LICENSE-NPOI-HWPF.txt
           'DOC reader built from nissl-lab/npoi commit 08e5459de5d71b5378d7810506e3919119444632, scratchpad/HWPFCore. Modified by Elansary: CHPBinTable compaction enumerates a snapshot while merging live runs. Apache License 2.0. NPOI dependency 2.4.1. DOC text-only preview; DOC outline/footnotes unsupported. TXT/Markdown source-text preview. No persistent content index.' | Set-Content publish/FORMAT-SUPPORT.txt
           Compress-Archive -Path publish/* -DestinationPath ElansaryWordLibrary-win-x64.zip
-          "Commit: $env:GITHUB_SHA`nOriginal CHP compaction bug reproduced before patch. Patched compaction, binary DOC read/search fixture, TXT/Markdown and published WPF startup checks passed. User's original DOC file not tested. Full UI interactions not device-tested. DOC outline/footnotes unsupported. No persistent content index." | Set-Content build-report.txt
+          "Commit: $env:GITHUB_SHA`nRegression fixture compiled against verified public HWPF APIs. Original CHP exception verified before patch. Patched CHP regression, binary DOC read/search fixture, other readers and published WPF startup checks passed. User's original DOC file not tested. Full UI interactions not device-tested. DOC outline/footnotes unsupported. No persistent content index." | Set-Content build-report.txt
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: build-diagnostics
           path: |
             startup-smoke-error.txt
+            ${{ runner.temp }}/ansary-hwpf-build.log
             ${{ runner.temp }}/ansary-hwpf-baseline.log
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4

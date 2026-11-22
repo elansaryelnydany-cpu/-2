@@ -1,5 +1,6 @@
 using Ansary;
 using System.IO.Compression;
+if(args.Contains("--expect-original-failure")){DocReaderRegression.ExpectOriginalFailure();return;}
 if(args.Contains("--compaction-only")){DocReaderRegression.Verify();Console.WriteLine("CHP compaction regression passed");return;}
 void Check(bool ok){if(!ok)throw new Exception("Check failed");}
 Check(Core.Match("العلم النافع والعمل",Core.Terms("العمل العلم")));Check(!Core.Match("العلم",Core.Terms("العلم العمل")));Check(Core.Terms("\"العلم النافع\" العمل").Length==2);
