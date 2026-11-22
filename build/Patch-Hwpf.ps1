@@ -18,7 +18,11 @@ $after = @'
             foreach (CHPX current in new List<CHPX>(_textRuns))
             {
 '@
-if ([regex]::Matches($text,[regex]::Escape($before)).Count -ne 1) { throw 'Expected compaction loop was not found exactly once' }
+$before = $before.Replace("`r`n","`n")
+$after = $after.Replace("`r`n","`n")
+$count = [regex]::Matches($text,[regex]::Escape($before)).Count
+if ($count -ne 1) { throw "Expected compaction loop exactly once; found $count matches after LF normalization" }
 $text = $text.Replace($before,$after)
+if ($text.Contains($before) -or !$text.Contains($after)) { throw 'HWPF patch postcondition failed' }
 [IO.File]::WriteAllText($path,$text,[Text.UTF8Encoding]::new($false))
 Write-Host 'Applied snapshot-enumeration compaction fix to pinned HWPF source.'
