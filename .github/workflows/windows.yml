@@ -10,9 +10,31 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout pinned HWPF source
+        uses: actions/checkout@v4
+        with:
+          repository: nissl-lab/npoi
+          ref: 08e5459de5d71b5378d7810506e3919119444632
+          path: legacy-reader/upstream
+          sparse-checkout: scratchpad/HWPFCore
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+      - name: Prove unpatched reader reproduces collection-modified failure
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $log = Join-Path $env:RUNNER_TEMP 'ansary-hwpf-baseline.log'
+          & dotnet run --project checks/Checks.csproj -c Release -- --compaction-only 2>&1 | Tee-Object -FilePath $log
+          $code = $LASTEXITCODE
+          if ($code -eq 0) { throw 'Unpatched reader unexpectedly passed the regression' }
+          if (!(Select-String -Path $log -SimpleMatch 'Collection was modified' -Quiet)) { throw 'Baseline failed for a different reason; inspect the log' }
+          Write-Host 'Confirmed original collection-modified exception before patch.'
+          exit 0
+      - name: Apply narrowly scoped HWPF source patch
+        shell: pwsh
+        run: ./build/Patch-Hwpf.ps1
       - name: Fetch and verify binary DOC test fixture
         shell: pwsh
         run: |
@@ -24,11 +46,11 @@ jobs:
           $hash = [Convert]::ToHexString([Security.Cryptography.SHA1]::HashData($blob)).ToLowerInvariant()
           if ($hash -ne '06921df39545bd0544f062a88c4532632cbea80e') { throw 'DOC fixture hash mismatch' }
           "ANSARY_DOC_FIXTURE=$fixture" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Check all readers and unordered search
+      - name: Check patched compaction, document readers and search
         run: dotnet run --project checks/Checks.csproj -c Release
       - name: Publish Windows x64 self-contained preview
         run: dotnet publish src/Library.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
-      - name: Verify published WPF window renders
+      - name: Verify published WPF window and patched DOC reader
         shell: pwsh
         run: |
           $exe = (Resolve-Path publish/ElansaryWordLibrary.exe).Path
@@ -41,20 +63,22 @@ jobs:
             if (Test-Path startup-smoke-error.txt) { Get-Content startup-smoke-error.txt | Write-Host }
             throw "WPF startup smoke test failed: $($process.ExitCode)"
           }
-      - name: Package with third-party license
+      - name: Package with patched-reader license and notice
         shell: pwsh
         run: |
           if (!(Test-Path publish/ElansaryWordLibrary.exe)) { throw 'Missing executable' }
           Copy-Item README.md publish/README.md
-          Invoke-WebRequest 'https://www.apache.org/licenses/LICENSE-2.0.txt' -OutFile publish/LICENSE-NPOI.txt
-          'Legacy DOC text reader: NPOI.HWPFCore 2.3.0.1 and NPOI 2.4.1; Apache License 2.0. https://www.nuget.org/packages/NPOI.HWPFCore/ . DOC outline and footnotes are not supported by this preview. TXT/Markdown preview displays source text. No persistent content index.' | Set-Content publish/FORMAT-SUPPORT.txt
+          Copy-Item legacy-reader/upstream/scratchpad/HWPFCore/LICENSE publish/LICENSE-NPOI-HWPF.txt
+          'DOC reader built from nissl-lab/npoi commit 08e5459de5d71b5378d7810506e3919119444632, scratchpad/HWPFCore. Modified by Elansary: CHPBinTable compaction enumerates a snapshot while merging live runs. Apache License 2.0. NPOI dependency 2.4.1. DOC text-only preview; DOC outline/footnotes unsupported. TXT/Markdown source-text preview. No persistent content index.' | Set-Content publish/FORMAT-SUPPORT.txt
           Compress-Archive -Path publish/* -DestinationPath ElansaryWordLibrary-win-x64.zip
-          "Commit: $env:GITHUB_SHA`nDOCX/TXT/UTF-16/Markdown/verified binary DOC reader checks passed. Published WPF startup smoke test passed. Full UI interactions not device-tested. DOC reading is text-only; DOC outline/footnotes not supported. No persistent content index." | Set-Content build-report.txt
+          "Commit: $env:GITHUB_SHA`nOriginal CHP compaction bug reproduced before patch. Patched compaction, binary DOC read/search fixture, TXT/Markdown and published WPF startup checks passed. User's original DOC file not tested. Full UI interactions not device-tested. DOC outline/footnotes unsupported. No persistent content index." | Set-Content build-report.txt
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: startup-diagnostics
-          path: startup-smoke-error.txt
+          name: build-diagnostics
+          path: |
+            startup-smoke-error.txt
+            ${{ runner.temp }}/ansary-hwpf-baseline.log
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
