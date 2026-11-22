@@ -1,39 +1,76 @@
-name: Build Windows library preview
-
+name: Build original Ansary Windows library
 on:
   push:
     branches: [main]
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   build:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
+        with:
+          repository: nissl-lab/npoi
+          ref: 08e5459de5d71b5378d7810506e3919119444632
+          path: legacy-reader/upstream
+          sparse-checkout: scratchpad/HWPFCore
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 8.0.x
-
-      - name: Restore
-        run: dotnet restore ElansaryWordLibrary.sln
-
-      - name: Build
-        run: dotnet publish src/ElansaryWordLibrary/ElansaryWordLibrary.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
-
-      - name: Package
-        run: Compress-Archive -Path publish/* -DestinationPath ElansaryWordLibrary-win-x64.zip
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+          dotnet-version: '10.0.x'
+      - name: Verify original CHP regression
+        shell: pwsh
+        run: |
+          dotnet run --project checks/Checks.csproj -c Release -- --expect-original-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Original CHP regression failed' }
+      - name: Apply pinned HWPF patch
+        shell: pwsh
+        run: ./build/Patch-Hwpf.ps1
+      - name: Verify patched CHP regression
+        run: dotnet run --project checks/Checks.csproj -c Release -- --compaction-only
+      - name: Fetch verified DOC fixture
+        shell: pwsh
+        run: |
+          $fixture = Join-Path $env:RUNNER_TEMP 'ansary-legacy-test.doc'
+          Invoke-WebRequest 'https://raw.githubusercontent.com/nissl-lab/npoi/master/testcases/test-data/document/test2.doc' -OutFile $fixture
+          $bytes = [IO.File]::ReadAllBytes($fixture)
+          $header = [Text.Encoding]::ASCII.GetBytes("blob $($bytes.Length)" + [char]0)
+          $blob = [byte[]]($header + $bytes)
+          $hash = [Convert]::ToHexString([Security.Cryptography.SHA1]::HashData($blob)).ToLowerInvariant()
+          if ($hash -ne '06921df39545bd0544f062a88c4532632cbea80e') { throw 'DOC fixture hash mismatch' }
+          "ANSARY_DOC_FIXTURE=$fixture" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Verify readers and search
+        run: dotnet run --project checks/Checks.csproj -c Release
+      - name: Publish original library
+        run: dotnet publish src/Library.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+      - name: Verify published WPF startup
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path publish/ElansaryWordLibrary.exe).Path
+          $process = Start-Process -FilePath $exe -ArgumentList '--startup-smoke-test' -PassThru
+          if (!$process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            throw 'WPF startup timed out'
+          }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path startup-smoke-error.txt) { Get-Content startup-smoke-error.txt }
+            throw "WPF startup failed: $($process.ExitCode)"
+          }
+      - name: Package original library
+        shell: pwsh
+        run: |
+          Copy-Item legacy-reader/upstream/scratchpad/HWPFCore/LICENSE publish/LICENSE-NPOI-HWPF.txt
+          'HWPF source: nissl-lab/npoi 08e5459de5d71b5378d7810506e3919119444632. Modified: snapshot enumeration in CHPBinTable compaction. Apache License 2.0. DOC text preview; full UI interactions not device-tested.' | Set-Content publish/FORMAT-SUPPORT.txt
+          Compress-Archive -Path publish/* -DestinationPath ElansaryWordLibrary-win-x64.zip
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: preview-${{ github.run_id }}
-          name: Windows document library preview
+          name: original-windows-library
+          path: ElansaryWordLibrary-win-x64.zip
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: original-${{ github.run_id }}
+          name: Original Ansary Windows library preview
           prerelease: true
-          files: |
-            ElansaryWordLibrary-win-x64.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          files: ElansaryWordLibrary-win-x64.zip
