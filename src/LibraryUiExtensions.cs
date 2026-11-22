@@ -13,7 +13,7 @@ namespace Ansary;
 public sealed partial class LibraryWindow {
  bool libraryUiInstalled;
  readonly List<string> searchHistory=new();
- readonly string historyPath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ElansaryWordLibrary","search-history.json");
+ readonly string searchHistoryPath=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ElansaryWordLibrary","search-history.json");
  WrapPanel? historyChips;
  Border? historyPanel;
  [ModuleInitializer]
@@ -87,10 +87,10 @@ public sealed partial class LibraryWindow {
   var value=text.Trim();if(value.Length==0)return;
   searchHistory.RemoveAll(p=>string.Equals(p,value,StringComparison.OrdinalIgnoreCase));
   searchHistory.Insert(0,value);if(searchHistory.Count>50)searchHistory.RemoveRange(50,searchHistory.Count-50);
-  Directory.CreateDirectory(Path.GetDirectoryName(historyPath)!);File.WriteAllText(historyPath,JsonSerializer.Serialize(searchHistory));RenderHistory();
+  Directory.CreateDirectory(Path.GetDirectoryName(searchHistoryPath)!);File.WriteAllText(searchHistoryPath,JsonSerializer.Serialize(searchHistory));RenderHistory();
  }
  void LoadHistory(){
-  try{if(File.Exists(historyPath))searchHistory.AddRange(JsonSerializer.Deserialize<string[]>(File.ReadAllText(historyPath))??Array.Empty<string>());}catch(Exception e){errors.Add(e.Message);}
+  try{if(File.Exists(searchHistoryPath))searchHistory.AddRange(JsonSerializer.Deserialize<string[]>(File.ReadAllText(searchHistoryPath))??Array.Empty<string>());}catch(Exception e){errors.Add(e.Message);}
  }
  void ToggleHistory(){
   if(historyPanel==null)return;
