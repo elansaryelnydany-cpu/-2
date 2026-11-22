@@ -21,25 +21,17 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Compile regression fixture against pinned public HWPF API
-        shell: pwsh
-        run: |
-          $log = Join-Path $env:RUNNER_TEMP 'ansary-hwpf-build.log'
-          & dotnet build checks/Checks.csproj -c Release 2>&1 | Tee-Object -FilePath $log
-          if ($LASTEXITCODE -ne 0) { throw 'Compilation failed; runtime regression has not been tested' }
-      - name: Verify exact original CHP exception without rebuilding
+      - name: Verify exact original CHP exception
         shell: pwsh
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'ansary-hwpf-baseline.log'
-          & dotnet run --no-build --project checks/Checks.csproj -c Release -- --expect-original-failure 2>&1 | Tee-Object -FilePath $log
+          & dotnet run --project checks/Checks.csproj -c Release -- --expect-original-failure 2>&1 | Tee-Object -FilePath $log
           if ($LASTEXITCODE -ne 0) { throw 'Expected original CHP exception was not verified' }
       - name: Apply narrowly scoped HWPF source patch
         shell: pwsh
         run: ./build/Patch-Hwpf.ps1
-      - name: Compile patched reader
-        run: dotnet build checks/Checks.csproj -c Release --no-restore
-      - name: Verify patched CHP regression without rebuilding
-        run: dotnet run --no-build --project checks/Checks.csproj -c Release -- --compaction-only
+      - name: Verify patched CHP regression
+        run: dotnet run --project checks/Checks.csproj -c Release -- --compaction-only
       - name: Fetch and verify binary DOC test fixture
         shell: pwsh
         run: |
@@ -52,7 +44,7 @@ jobs:
           if ($hash -ne '06921df39545bd0544f062a88c4532632cbea80e') { throw 'DOC fixture hash mismatch' }
           "ANSARY_DOC_FIXTURE=$fixture" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - name: Check actual DOC reading and search plus other formats
-        run: dotnet run --no-build --project checks/Checks.csproj -c Release
+        run: dotnet run --project checks/Checks.csproj -c Release
       - name: Publish Windows x64 self-contained preview
         run: dotnet publish src/Library.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
       - name: Verify published WPF window and patched DOC reader
@@ -83,7 +75,6 @@ jobs:
           name: build-diagnostics
           path: |
             startup-smoke-error.txt
-            ${{ runner.temp }}/ansary-hwpf-build.log
             ${{ runner.temp }}/ansary-hwpf-baseline.log
           if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
