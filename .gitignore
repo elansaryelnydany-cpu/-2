@@ -1,4 +1,5 @@
-**/bin/
-**/obj/
-publish/
-*.zip
+bin/
+obj/
+.vs/
+*.user
+*.suo
