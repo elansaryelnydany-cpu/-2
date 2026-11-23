@@ -9,6 +9,7 @@ using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -58,9 +59,9 @@ public sealed class ElansaryEditorWindow:Window {
   Capsule(LocalButton(fileBar,"حفظ باسم",SaveAsDoc),"#7A3E9D");
   Capsule(LocalButton(fileBar,"تصدير PDF",ExportPdf),"#B03333");
   var formatBar=new WrapPanel();DockPanel.SetDock(formatBar,Dock.Top);editorHost.Children.Add(formatBar);
-  var fontBox=new ComboBox{Width=120,Margin=new Thickness(2),ItemsSource=Fonts.SystemFontFamilies.Select(f=>f.Source).OrderBy(s=>s).ToList()};formatBar.Children.Add(fontBox);fontBox.SelectionChanged+=(_,_)=>{if(fontBox.SelectedItem is string f)ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.FontFamilyProperty,new FontFamily(f)));};
+  var fontBox=new ComboBox{Width=120,Margin=new Thickness(2),ItemsSource=System.Windows.Media.Fonts.SystemFontFamilies.Select(f=>f.Source).OrderBy(s=>s).ToList()};formatBar.Children.Add(fontBox);fontBox.SelectionChanged+=(_,_)=>{if(fontBox.SelectedItem is string f)ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.FontFamilyProperty,new FontFamily(f)));};
   var sizeBox=new ComboBox{Width=60,Margin=new Thickness(2),ItemsSource=new[]{8,9,10,11,12,14,16,18,20,24,28,32,36,48},SelectedIndex=5};formatBar.Children.Add(sizeBox);sizeBox.SelectionChanged+=(_,_)=>{if(sizeBox.SelectedItem is int s)ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.FontSizeProperty,(double)s));};
-  Capsule(LocalButton(formatBar,"عريض",()=>ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.FontWeightProperty,t.GetPropertyValue(TextElement.FontWeightProperty) is FontWeight w&&w==FontWeights.Bold?FontWeights.Normal:FontWeights.Bold))),"#2563A6");
+  Capsule(LocalButton(formatBar,"عريض",()=>ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.FontWeightProperty,t.GetPropertyValue(TextElement.FontWeightProperty) is System.Windows.FontWeight w&&w==FontWeights.Bold?FontWeights.Normal:FontWeights.Bold))),"#2563A6");
   Capsule(LocalButton(formatBar,"مائل",()=>ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.FontStyleProperty,t.GetPropertyValue(TextElement.FontStyleProperty) is FontStyle s&&s==FontStyles.Italic?FontStyles.Normal:FontStyles.Italic))),"#2563A6");
   Capsule(LocalButton(formatBar,"تسطير",()=>ApplyToSelection(t=>t.ApplyPropertyValue(Inline.TextDecorationsProperty,t.GetPropertyValue(Inline.TextDecorationsProperty) is TextDecorationCollection d&&d.Count>0?null:TextDecorations.Underline))),"#2563A6");
   var colorBox=new ComboBox{Width=90,Margin=new Thickness(2),ItemsSource=new[]{"أسود","أحمر","أزرق","أخضر","برتقالي","بنفسجي"}};formatBar.Children.Add(colorBox);colorBox.SelectionChanged+=(_,_)=>{var colors=new[]{"#000000","#D32F2F","#1565C0","#2E7D32","#EF6C00","#6A1B9A"};if(colorBox.SelectedIndex>=0)ApplyToSelection(t=>t.ApplyPropertyValue(TextElement.ForegroundProperty,(Brush)new BrushConverter().ConvertFromString(colors[colorBox.SelectedIndex])!));};
@@ -71,7 +72,7 @@ public sealed class ElansaryEditorWindow:Window {
   Capsule(LocalButton(formatBar,"عنوان 2",()=>SetHeading(2)),"#6A4FD1");
   Capsule(LocalButton(formatBar,"عنوان 3",()=>SetHeading(3)),"#6A4FD1");
   var searchBar=new WrapPanel();DockPanel.SetDock(searchBar,Dock.Top);editorHost.Children.Add(searchBar);
-  searchBar.Children.Add(new TextBlock{Text="بحث في المستند:",VerticalAlignment=VerticalAlignment.Center,Margin=new Thickness(4)});
+  searchBar.Children.Add(new TextBlock{Text="بحث في المستند:",VerticalAlignment=System.Windows.VerticalAlignment.Center,Margin=new Thickness(4)});
   searchBar.Children.Add(searchBox);
   Capsule(LocalButton(searchBar,"بحث",()=>Search(true)),"#2563A6");
   Capsule(LocalButton(searchBar,"السابق",()=>Navigate(-1)),"#1F6F8B");
@@ -120,7 +121,7 @@ public sealed class ElansaryEditorWindow:Window {
      if(rp.Italic!=null)run.FontStyle=FontStyles.Italic;
      if(rp.Underline!=null)run.TextDecorations=TextDecorations.Underline;
      if(rp.Color!=null&&rp.Color.Val!=null)run.Foreground=(Brush)new BrushConverter().ConvertFromString("#"+rp.Color.Val.Value!.TrimStart('#'))!;
-     if(rp.Size!=null&&int.TryParse(rp.Size.Val?.Value,out var half))run.FontSize=half/2.0;
+     if(rp.FontSize!=null&&int.TryParse(rp.FontSize.Val?.Value,out var half))run.FontSize=half/2.0;
     }
     para.Inlines.Add(run);
    }
